@@ -1,2 +1,4 @@
 streamlit>=1.36.0
 pandas>=2.2.0
+wordcloud>=1.9.0
+matplotlib>=3.8.0
