@@ -3,10 +3,8 @@ import re
 from collections import Counter
 from typing import List, Tuple
 
-import matplotlib.pyplot as plt
 import pandas as pd
 import streamlit as st
-from wordcloud import WordCloud
 
 st.set_page_config(page_title="文本分析器", page_icon="📝", layout="wide")
 
@@ -383,19 +381,6 @@ if text:
             top_df = pd.DataFrame(analysis["top_words"], columns=["词", "频次"])
             st.dataframe(top_df, use_container_width=True)
             st.bar_chart(top_df.set_index("词"))
-
-            st.subheader("词云图")
-            word_freq = dict(analysis["top_words"])
-            if word_freq:
-                wc = WordCloud(width=900, height=500, background_color="white", collocations=False)
-                cloud = wc.generate_from_frequencies(word_freq)
-                fig, ax = plt.subplots(figsize=(10, 5))
-                ax.imshow(cloud, interpolation="bilinear")
-                ax.axis("off")
-                st.pyplot(fig)
-                plt.close(fig)
-            else:
-                st.info("没有可生成的词云。")
         else:
             st.info("没有提取到关键词。")
 
