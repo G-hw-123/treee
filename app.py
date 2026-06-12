@@ -1,7 +1,6 @@
 import json
 import re
 from collections import Counter
-from itertools import islice
 from typing import List, Tuple
 
 import pandas as pd
@@ -9,8 +8,8 @@ import streamlit as st
 
 st.set_page_config(page_title="文本分析器", page_icon="📝", layout="wide")
 
-st.title("📝 文本分析器")
-st.write("支持文本清洗、词频分析、句子分析、N-gram 和结果导出。")
+st.title("📝 文本分析器 Pro")
+st.write("一站式文本分析工具箱：清洗、统计、摘要、情绪、可读性、重复检测、正则搜索和导出。")
 
 DEFAULT_STOPWORDS = {
     "a",
@@ -59,8 +58,78 @@ DEFAULT_STOPWORDS = {
     "那样",
     "可以",
     "吗",
-    "吗",
 }
+
+POSITIVE_WORDS = {
+    "good",
+    "great",
+    "excellent",
+    "nice",
+    "happy",
+    "love",
+    "best",
+    "better",
+    "improve",
+    "improved",
+    "success",
+    "thanks",
+    "thank",
+    "beautiful",
+    "useful",
+    "easy",
+    "清楚",
+    "优秀",
+    "好",
+    "开心",
+    "喜欢",
+    "满意",
+    "高效",
+    "强大",
+    "完美",
+}
+NEGATIVE_WORDS = {
+    "bad",
+    "terrible",
+    "worse",
+    "worst",
+    "sad",
+    "hate",
+    "problem",
+    "issue",
+    "bug",
+    "slow",
+    "hard",
+    "difficult",
+    "poor",
+    "broken",
+    "失败",
+    "差",
+    "糟糕",
+    "问题",
+    "麻烦",
+    "困难",
+    "慢",
+    "糟",
+    "痛苦",
+    "烦人",
+}
+
+
+def estimate_syllables(word: str) -> int:
+    word = word.lower()
+    if not word:
+        return 0
+    vowels = "aeiou"
+    count = 0
+    prev_vowel = False
+    for ch in word:
+        is_vowel = ch in vowels
+        if is_vowel and not prev_vowel:
+            count += 1
+        prev_vowel = is_vowel
+    if word.endswith(("e", "es", "ed")) and count > 1:
+        count -= 1
+    return max(1, count)
 
 
 @st.cache_data(show_spinner=False)
@@ -75,6 +144,8 @@ def analyze_text(
     min_word_length: int,
     top_n: int,
     ngram_size: int,
+    summary_sentences: int,
+    regex_pattern: str,
 ) -> dict:
     if not raw_text or not raw_text.strip():
         return {
@@ -93,6 +164,16 @@ def analyze_text(
             "repeat_words": [],
             "ngrams": [],
             "word_list": [],
+            "char_frequency": [],
+            "word_length_distribution": [],
+            "duplicate_sentences": [],
+            "summary": [],
+            "sentiment": "neutral",
+            "sentiment_score": 0,
+            "readability": 0.0,
+            "type_token_ratio": 0.0,
+            "hapax_legomena": [],
+            "regex_matches": [],
         }
 
     text = raw_text.strip()
@@ -114,7 +195,8 @@ def analyze_text(
     lines = len(raw_text.splitlines())
     paragraphs = len([p for p in re.split(r"\n\s*\n", raw_text.strip()) if p.strip()])
 
-    sentences = [s.strip() for s in re.split(r"(?<=[。！？.!?])\s+|(?<=\n)", raw_text) if s.strip()]
+    sentence_split_pattern = re.compile(r"(?<=[。！？.!?])\s+|(?<=\n)")
+    sentences = [s.strip() for s in sentence_split_pattern.split(raw_text) if s.strip()]
     word_pattern = re.compile(r"[A-Za-z0-9\u4e00-\u9fff]+")
     words = [token for token in word_pattern.findall(text)]
 
@@ -123,26 +205,72 @@ def analyze_text(
     else:
         words = [w for w in words if len(w) >= min_word_length]
 
+    word_counter = Counter(words)
+    top_words = word_counter.most_common(top_n)
+    repeat_words = [(word, count) for word, count in word_counter.items() if count > 1]
+    average_word_length = round(sum(len(w) for w in words) / len(words), 2) if words else 0.0
+    average_sentence_length = round(len(words) / len(sentences), 2) if sentences else 0.0
+    longest_sentence = max(sentences, key=lambda s: len(s), default="")
+    char_counter = Counter(text)
+    char_frequency = [(ch, count) for ch, count in char_counter.most_common(30)]
+    word_length_distribution = [(length, count) for length, count in Counter(len(w) for w in words).most_common()]
+
+    sentence_counts = Counter(sentences)
+    duplicate_sentences = [(sentence, count) for sentence, count in sentence_counts.items() if count > 1]
+
     if words:
-        word_counter = Counter(words)
-        top_words = word_counter.most_common(top_n)
-        repeat_words = [(word, count) for word, count in word_counter.items() if count > 1]
-        average_word_length = round(sum(len(w) for w in words) / len(words), 2)
-        average_sentence_length = round(len(words) / len(sentences), 2) if sentences else 0.0
-        longest_sentence = max(sentences, key=lambda s: len(s), default="")
+        type_token_ratio = round(len(word_counter) / len(words), 3)
+        hapax_legomena = [(word, count) for word, count in word_counter.items() if count == 1]
     else:
-        word_counter = Counter()
-        top_words = []
-        repeat_words = []
-        average_word_length = 0.0
-        average_sentence_length = 0.0
-        longest_sentence = ""
+        type_token_ratio = 0.0
+        hapax_legomena = []
+
+    sentiment_score = 0
+    for word in words:
+        if word in POSITIVE_WORDS:
+            sentiment_score += 1
+        if word in NEGATIVE_WORDS:
+            sentiment_score -= 1
+    if sentiment_score > 0:
+        sentiment = "positive"
+    elif sentiment_score < 0:
+        sentiment = "negative"
+    else:
+        sentiment = "neutral"
+
+    if words and sentences:
+        syllables = sum(estimate_syllables(w) for w in words)
+        readability = round(206.835 - 1.015 * (len(words) / len(sentences)) - 84.6 * (syllables / len(words)), 2)
+    else:
+        readability = 0.0
+
+    summary_candidates = []
+    if sentences:
+        sentence_scores = []
+        for sentence in sentences:
+            sent_tokens = [t for t in word_pattern.findall(sentence.lower()) if t not in DEFAULT_STOPWORDS]
+            score = sum(word_counter.get(token, 0) for token in sent_tokens)
+            sentence_scores.append((score, sentence))
+        summary_candidates = [s for _, s in sorted(sentence_scores, key=lambda item: item[0], reverse=True)[:summary_sentences]]
 
     ngrams: List[Tuple[str, ...]] = []
     if words and ngram_size > 1:
-        ngrams = [tuple(gram) for gram in [words[i : i + ngram_size] for i in range(len(words) - ngram_size + 1)]]
-        ngram_counter = Counter(ngrams)
-        ngrams = [((" ".join(g), count)) for g, count in ngram_counter.most_common(top_n)]
+        ngram_counter = Counter(tuple(words[i : i + ngram_size]) for i in range(len(words) - ngram_size + 1))
+        ngrams = [(" ".join(g), count) for g, count in ngram_counter.most_common(top_n)]
+
+    regex_matches = []
+    if regex_pattern:
+        try:
+            for match in re.finditer(regex_pattern, raw_text, flags=re.IGNORECASE):
+                regex_matches.append(
+                    {
+                        "match": match.group(0),
+                        "start": match.start(),
+                        "end": match.end(),
+                    }
+                )
+        except re.error:
+            regex_matches = []
 
     return {
         "cleaned_text": text,
@@ -160,6 +288,16 @@ def analyze_text(
         "repeat_words": repeat_words,
         "ngrams": ngrams,
         "word_list": sorted(word_counter.keys()),
+        "char_frequency": char_frequency,
+        "word_length_distribution": word_length_distribution,
+        "duplicate_sentences": duplicate_sentences,
+        "summary": summary_candidates,
+        "sentiment": sentiment,
+        "sentiment_score": sentiment_score,
+        "readability": readability,
+        "type_token_ratio": type_token_ratio,
+        "hapax_legomena": hapax_legomena,
+        "regex_matches": regex_matches,
     }
 
 
@@ -194,6 +332,8 @@ with st.sidebar:
     min_word_length = st.slider("最小词长", 1, 5, 1)
     top_n = st.slider("Top 词数量", 5, 30, 10)
     ngram_size = st.slider("N-gram 长度", 1, 4, 2)
+    summary_sentences = st.slider("摘要句子数", 1, 5, 3)
+    regex_pattern = st.text_input("正则搜索模式", value="")
 
 if text:
     analysis = analyze_text(
@@ -207,9 +347,11 @@ if text:
         min_word_length=min_word_length,
         top_n=top_n,
         ngram_size=ngram_size,
+        summary_sentences=summary_sentences,
+        regex_pattern=regex_pattern,
     )
 
-    tab1, tab2, tab3 = st.tabs(["分析结果", "清洗后文本", "导出结果"])
+    tab1, tab2, tab3, tab4 = st.tabs(["综合分析", "清洗后文本", "高级指标", "导出结果"])
 
     with tab1:
         st.subheader("统计结果")
@@ -226,6 +368,13 @@ if text:
         )
         if analysis["longest_sentence"]:
             st.write(f"最长句子：{analysis['longest_sentence']}")
+
+        st.subheader("摘要")
+        if analysis["summary"]:
+            for idx, sentence in enumerate(analysis["summary"], 1):
+                st.write(f"{idx}. {sentence}")
+        else:
+            st.info("没有可生成的摘要。")
 
         st.subheader("关键词 Top")
         if analysis["top_words"]:
@@ -259,10 +408,55 @@ if text:
             st.info("没有可显示的词表。")
 
     with tab3:
+        st.subheader("高级指标")
+        c1, c2, c3, c4 = st.columns(4)
+        c1.metric("情绪倾向", analysis["sentiment"])
+        c2.metric("情绪得分", analysis["sentiment_score"])
+        c3.metric("可读性分数", round(analysis["readability"], 2))
+        c4.metric("词汇丰富度", round(analysis["type_token_ratio"], 3))
+
+        st.subheader("字符频次")
+        if analysis["char_frequency"]:
+            char_df = pd.DataFrame(analysis["char_frequency"], columns=["字符", "频次"])
+            st.dataframe(char_df, use_container_width=True)
+        else:
+            st.info("没有可展示的字符频次。")
+
+        st.subheader("词长分布")
+        if analysis["word_length_distribution"]:
+            length_df = pd.DataFrame(analysis["word_length_distribution"], columns=["长度", "频次"])
+            st.dataframe(length_df, use_container_width=True)
+        else:
+            st.info("没有可展示的词长分布。")
+
+        st.subheader("重复句子")
+        if analysis["duplicate_sentences"]:
+            dup_df = pd.DataFrame(analysis["duplicate_sentences"], columns=["句子", "次数"])
+            st.dataframe(dup_df, use_container_width=True)
+        else:
+            st.info("没有重复句子。")
+
+        st.subheader("Hapax Legomena")
+        if analysis["hapax_legomena"]:
+            hapax_df = pd.DataFrame(analysis["hapax_legomena"], columns=["词", "次数"])
+            st.dataframe(hapax_df, use_container_width=True)
+        else:
+            st.info("没有罕见词。")
+
+    with tab4:
+        st.subheader("正则搜索")
+        if analysis["regex_matches"]:
+            regex_df = pd.DataFrame(analysis["regex_matches"])
+            st.dataframe(regex_df, use_container_width=True)
+        else:
+            st.info("没有匹配结果。")
+
         st.subheader("导出结果")
         top_df = pd.DataFrame(analysis["top_words"], columns=["词", "频次"])
         repeat_df = pd.DataFrame(analysis["repeat_words"], columns=["词", "出现次数"])
         ngram_df = pd.DataFrame(analysis["ngrams"], columns=["短语", "频次"])
+        char_df = pd.DataFrame(analysis["char_frequency"], columns=["字符", "频次"])
+        length_df = pd.DataFrame(analysis["word_length_distribution"], columns=["长度", "频次"])
 
         csv_bytes = top_df.to_csv(index=False).encode("utf-8")
         st.download_button(
